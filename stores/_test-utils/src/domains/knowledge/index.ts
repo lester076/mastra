@@ -137,5 +137,6 @@ export function createKnowledgeLegacyUpgradeTests(fixture: KnowledgeLegacyUpgrad
   });
 }
 
+export { createKnowledgeHeldScopeTests } from './held-scopes';
 export { createKnowledgeHostWriteTests } from './host-writes';
 export { createKnowledgePageStoreTests } from './pages';

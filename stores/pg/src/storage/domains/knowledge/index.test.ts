@@ -1,5 +1,6 @@
 import {
   createKnowledgeLegacyUpgradeTests,
+  createKnowledgeHeldScopeTests,
   createKnowledgeHostWriteTests,
   createKnowledgePageStoreTests,
 } from '@internal/storage-test-utils';
@@ -109,6 +110,7 @@ beforeAll(async () => {
 
 createKnowledgePageStoreTests(() => new KnowledgePG({ pool, schemaName: 'knowledge_contract_test' }));
 createKnowledgeHostWriteTests(() => new KnowledgePG({ pool, schemaName: 'knowledge_contract_test' }));
+createKnowledgeHeldScopeTests(() => new KnowledgePG({ pool, schemaName: 'knowledge_contract_test' }));
 
 const LEGACY_SCHEMA = 'knowledge_legacy_test';
 const legacyTable = (name: string) => `"${LEGACY_SCHEMA}"."${name}"`;
