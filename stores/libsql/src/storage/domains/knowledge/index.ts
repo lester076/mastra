@@ -23,6 +23,7 @@ import type {
 import { withClientWriteLock } from '../../db/write-lock';
 import { KNOWLEDGE_IMPORTER_DDL, LibSQLKnowledgeImporters } from './importers';
 import { KNOWLEDGE_PAGE_DDL, KNOWLEDGE_PAGE_TABLES, LibSQLKnowledgePages, upgradeKnowledgePinKinds } from './pages';
+import { KNOWLEDGE_TIMELINE_DDL, LibSQLKnowledgeTimelines } from './timelines';
 
 interface Executor {
   execute(statement: string | { sql: string; args?: InValue[] }): Promise<ResultSet>;
@@ -87,6 +88,7 @@ export class KnowledgeLibSQL extends KnowledgeStorage {
   readonly #pages: LibSQLKnowledgePages;
   readonly #inTransaction?: Transaction;
   readonly #importers?: LibSQLKnowledgeImporters;
+  readonly #timelines?: LibSQLKnowledgeTimelines;
   #savepoints = 0;
 
   /** The importer tables' DDL, for provisioning them ahead of time when storage init is disabled. */
@@ -116,6 +118,22 @@ export class KnowledgeLibSQL extends KnowledgeStorage {
         transaction: operation => this.#transaction(operation),
       });
     }
+    if (coreFeatures.has('knowledge-timelines')) {
+      this.#timelines = new LibSQLKnowledgeTimelines({
+        read: this.#inTransaction ?? this.#client,
+        transaction: operation => this.#transaction(operation),
+        readable: async (id, read) => {
+          // getPage returns a deleted page too; a timeline reads only through a live one.
+          const page = await this.#pages.getPage({ id, read });
+          return !!page && !page.deletedAt;
+        },
+      });
+    }
+  }
+
+  /** Same database as the pages: on a transaction view, the view's write transaction. */
+  override get timelines(): LibSQLKnowledgeTimelines | undefined {
+    return this.#timelines;
   }
 
   /** Same database as the pages: on a transaction view, the view's write transaction. */
@@ -136,6 +154,7 @@ export class KnowledgeLibSQL extends KnowledgeStorage {
   }
 
   override async dangerouslyClearAll(): Promise<void> {
+    await this.#timelines?.clearAll();
     await this.#pages.clearAll();
   }
 
@@ -172,6 +191,7 @@ export class KnowledgeLibSQL extends KnowledgeStorage {
       const inspection = await this.#inspectPages(tx);
       if (inspection.status === 'incompatible-reset-required') throw new KnowledgeSchemaResetRequiredError(inspection);
       for (const statement of KNOWLEDGE_PAGE_DDL) await tx.execute(statement);
+      if (this.#timelines) for (const statement of KNOWLEDGE_TIMELINE_DDL) await tx.execute(statement);
       await upgradeKnowledgePinKinds(tx);
       await tx.execute({
         sql: `INSERT OR IGNORE INTO "${TABLE_KNOWLEDGE_PAGES_STATE}" (id, schemaVersion) VALUES ('knowledge', ?)`,
@@ -187,6 +207,7 @@ export class KnowledgeLibSQL extends KnowledgeStorage {
       await this.#client.batch(
         [
           ...importerStatements.map(sql => ({ sql, args: [] })),
+          ...LibSQLKnowledgeTimelines.resetStatements().map(sql => ({ sql, args: [] })),
           ...[...KNOWLEDGE_RESETTABLE_TABLE_NAMES, KNOWLEDGE_PAGE_TABLES.pinAudiences, KNOWLEDGE_PAGE_TABLES.links].map(
             table => ({
               sql: `DROP TABLE IF EXISTS "${table}"`,
