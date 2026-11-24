@@ -29,6 +29,7 @@ import * as coreStorage from '@mastra/core/storage';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { withClientWriteLock } from '../../db/write-lock';
+import { LIBSQL_KNOWLEDGE_TIMELINE_TABLES } from './timelines';
 import { LibSQLStore } from '../../index';
 import { getLibSQLKnowledgeIsolationKey, KnowledgeLibSQL, libsqlKnowledgeTransaction } from '.';
 
@@ -230,7 +231,12 @@ createKnowledgeSchemaResetTests(async () => {
       );
       const names = new Set(tables.rows.map(row => String(row.name)));
       expect(names).toEqual(
-        new Set([...KNOWLEDGE_PAGES_TABLE_NAMES, 'mastra_knowledge_pin_audiences', 'mastra_knowledge_page_links']),
+        new Set([
+          ...KNOWLEDGE_PAGES_TABLE_NAMES,
+          'mastra_knowledge_pin_audiences',
+          'mastra_knowledge_page_links',
+          ...Object.values(LIBSQL_KNOWLEDGE_TIMELINE_TABLES),
+        ]),
       );
     },
     cleanup: async () => client.close(),
