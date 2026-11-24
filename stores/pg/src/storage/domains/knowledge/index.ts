@@ -11,7 +11,7 @@ import { resolvePgConfig } from '../../db';
 import { PgKnowledgeImporters, pgKnowledgeImportersDDL } from './importers';
 import { PgKnowledgePages, pgKnowledgePagesDDL } from './pages';
 import { inspectPgKnowledgePagesSchema, initPgKnowledgePagesSchema, resetPgKnowledgePagesSchema } from './pages-schema';
-import { PgKnowledgeTimelines } from './timelines';
+import { PgKnowledgeTimelines, pgKnowledgeTimelinesDDL } from './timelines';
 
 const loadKnowledgePagesCore = createKnowledgePagesCoreLoader(coreFeatures, () => import('@mastra/core/storage'));
 
@@ -143,7 +143,9 @@ type PageStoreMethod = {
 /** @experimental Knowledge APIs are experimental and may change without notice. */
 export class KnowledgePG extends KnowledgeStorage {
   static getExportDDL(schemaName?: string): string[] {
-    return pgKnowledgePagesDDL(schemaName).map(statement => `${statement};`);
+    return [...pgKnowledgePagesDDL(schemaName), ...pgKnowledgeTimelinesDDL(schemaName)].map(
+      statement => `${statement};`,
+    );
   }
 
   readonly #client: DbClient;
