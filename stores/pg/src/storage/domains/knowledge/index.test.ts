@@ -6,6 +6,7 @@ import {
   createKnowledgeImportersStorageTests,
   createKnowledgeLegacyUpgradeTests,
   createKnowledgePageStoreTests,
+  createKnowledgeTimelineTests,
   createKnowledgeTransactionTests,
   knowledgeStoreThroughTransactions,
 } from '@internal/storage-test-utils';
@@ -115,6 +116,15 @@ beforeAll(async () => {
 
 createKnowledgePageStoreTests(() => new KnowledgePG({ pool, schemaName: 'knowledge_contract_test' }));
 createKnowledgeHostWriteTests(() => new KnowledgePG({ pool, schemaName: 'knowledge_contract_test' }));
+
+// Reset before each case: the reset must also drop and recreate the timeline tables.
+createKnowledgeTimelineTests(async () => {
+  const store = new KnowledgePG({ pool, schemaName: 'knowledge_timeline_test' });
+  await pool.query('CREATE SCHEMA IF NOT EXISTS "knowledge_timeline_test"');
+  await store.init();
+  await store.dangerouslyReset();
+  return store;
+});
 
 describe('through transaction views', () => {
   beforeAll(async () => {
