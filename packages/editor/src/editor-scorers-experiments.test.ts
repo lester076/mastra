@@ -326,6 +326,7 @@ describe('stored scorers in durable experiments', () => {
     const { storage, api } = await setup();
     const versionId = await createJudge(api, 'helpfulness');
     const dataset = await seedDataset(api);
+    const addScore = vi.spyOn(api.observability, 'addScore');
 
     const summary = await dataset.startExperiment({
       targetType: 'workflow',
@@ -339,6 +340,10 @@ describe('stored scorers in durable experiments', () => {
     expect(await scoresFor(storage, summary.experimentId)).toEqual([
       { scorerId: 'helpfulness', score: 0.6, versionId },
       { scorerId: 'helpfulness', score: 0.6, versionId },
+    ]);
+    expect(addScore.mock.calls.map(([{ score }]) => [score.scorerId, score.scorerVersion])).toEqual([
+      ['helpfulness', versionId],
+      ['helpfulness', versionId],
     ]);
   });
 
