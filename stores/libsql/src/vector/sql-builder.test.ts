@@ -18,8 +18,8 @@ describe('buildFilterQuery $size operator', () => {
     const { sql, values } = buildFilterQuery({ tags: { $size: 5 }, category: 'tools' });
 
     expect(sql).not.toMatch(/\$\d/);
-    // $size value first, then the equality value — both positional.
-    expect(values).toEqual([5, 'tools']);
+    // $size value first, then the equality value with its json_type guard.
+    expect(values).toEqual([5, 'tools', 'text']);
     expect((sql.match(/\?/g) ?? []).length).toBe(values.length);
   });
 
@@ -39,24 +39,73 @@ describe('buildFilterQuery multi-key branches inside logical operators', () => {
     const { sql, values } = buildFilterQuery({ $or: [{ category: 'electronics', available: true }, { price: 5 }] });
 
     expect(sql).toBe(
-      `WHERE ((json_extract(metadata, '$.category') = ? AND json_extract(metadata, '$.available') = ?) OR json_extract(metadata, '$.price') = ?)`,
+      `WHERE (((json_extract(metadata, '$.category') = ? AND json_type(json_extract(metadata, '$.category')) = ?) AND (json_extract(metadata, '$.available') = ? AND json_type(json_extract(metadata, '$.available')) = ?)) OR (json_extract(metadata, '$.price') = ? AND json_type(json_extract(metadata, '$.price')) = ?))`,
     );
-    expect(values).toEqual(['electronics', true, 5]);
+    expect(values).toEqual(['electronics', 'text', true, 'true', 5, 'integer']);
   });
 
   it('negates the whole branch for $nor', () => {
     const { sql, values } = buildFilterQuery({ $nor: [{ status: 'archived', pinned: false }] });
 
-    expect(sql).toBe(`WHERE NOT ((json_extract(metadata, '$.status') = ? AND json_extract(metadata, '$.pinned') = ?))`);
-    expect(values).toEqual(['archived', false]);
+    expect(sql).toBe(
+      `WHERE NOT ((json_extract(metadata, '$.status') = ? AND json_type(json_extract(metadata, '$.status')) = ?) AND (json_extract(metadata, '$.pinned') = ? AND json_type(json_extract(metadata, '$.pinned')) = ?))`,
+    );
+    expect(values).toEqual(['archived', 'text', false, 'false']);
   });
 
   it('ANDs field keys with a nested logical operator in the same branch', () => {
     const { sql, values } = buildFilterQuery({ $or: [{ $and: [{ a: 1 }], c: 2 }, { d: 3 }] });
 
     expect(sql).toBe(
-      `WHERE (((json_extract(metadata, '$.a') = ?) AND json_extract(metadata, '$.c') = ?) OR json_extract(metadata, '$.d') = ?)`,
+      `WHERE (((json_extract(metadata, '$.a') = ? AND json_type(json_extract(metadata, '$.a')) = ?)) AND (json_extract(metadata, '$.c') = ? AND json_type(json_extract(metadata, '$.c')) = ?) OR (json_extract(metadata, '$.d') = ? AND json_type(json_extract(metadata, '$.d')) = ?))`,
     );
-    expect(values).toEqual([1, 2, 3]);
+    expect(values).toEqual([1, 'integer', 2, 'integer', 3, 'integer']);
+  });
+});
+
+describe('type-exact equality and range guards (#31591)', () => {
+  it('guards shorthand equality with json_type', () => {
+    const { sql, values } = buildFilterQuery({ stage: false });
+    expect(sql).toBe(
+      `WHERE (json_extract(metadata, '$.stage') = ? AND json_type(json_extract(metadata, '$.stage')) = ?)`,
+    );
+    expect(values).toEqual([false, 'false']);
+  });
+
+  it('guards explicit $eq with json_type', () => {
+    const { sql, values } = buildFilterQuery({ stage: { $eq: 0 } });
+    expect(sql).toContain(`json_type(json_extract(metadata, '$.stage')) = ?`);
+    expect(values).toEqual([0, 'integer']);
+  });
+
+  it('guards explicit $ne with a value-OR-type inequality', () => {
+    const { sql, values } = buildFilterQuery({ stage: { $ne: false } });
+    expect(sql).toContain(`json_extract(metadata, '$.stage') != ?`);
+    expect(sql).toContain(`json_type(json_extract(metadata, '$.stage')) != ?`);
+    expect(values).toEqual([false, 'false']);
+  });
+
+  it('restricts numeric ranges to stored numbers', () => {
+    const { sql, values } = buildFilterQuery({ score: { $gt: 0 } });
+    expect(sql).toContain(`json_type(json_extract(metadata, '$.score')) IN ('integer', 'real')`);
+    expect(values).toEqual([0]);
+  });
+
+  it('matches shorthand null only against an explicit JSON null', () => {
+    const { sql, values } = buildFilterQuery({ stage: null });
+    expect(sql).toBe(`WHERE json_type(json_extract(metadata, '$.stage')) = 'null'`);
+    expect(values).toEqual([]);
+  });
+
+  it('matches $eq null only against an explicit JSON null', () => {
+    const { sql, values } = buildFilterQuery({ stage: { $eq: null } });
+    expect(sql).toContain(`json_type(json_extract(metadata, '$.stage')) = 'null'`);
+    expect(values).toEqual([]);
+  });
+
+  it('keeps $ne null matching present non-null values only', () => {
+    const { sql, values } = buildFilterQuery({ stage: { $ne: null } });
+    expect(sql).toContain(`json_extract(metadata, '$.stage') IS NOT NULL`);
+    expect(values).toEqual([]);
   });
 });

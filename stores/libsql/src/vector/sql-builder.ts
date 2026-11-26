@@ -26,20 +26,44 @@ type FilterOperator = {
 
 type OperatorFn = (key: string, value?: any) => FilterOperator;
 
+/** JSON1 type name for a JS filter value, so comparisons stay type-exact. */
+const jsonTypeOf = (value: any): string => {
+  if (value === null) return 'null';
+  switch (typeof value) {
+    case 'boolean':
+      return value ? 'true' : 'false';
+    case 'number':
+      return Number.isInteger(value) ? 'integer' : 'real';
+    default:
+      return 'text';
+  }
+};
+
 // Helper functions to create operators
 const createBasicOperator = (symbol: string) => {
   return (key: string, value: any): FilterOperator => {
     const jsonPath = getJsonPath(key);
+    if (value === null) {
+      // An explicit null must match an explicit JSON null, not a missing key
+      // (json_extract returns NULL for both) (#31591).
+      return {
+        sql:
+          symbol === '='
+            ? `json_type(json_extract(metadata, ${jsonPath})) = 'null'`
+            : `json_extract(metadata, ${jsonPath}) IS NOT NULL`,
+        needsValue: false,
+      };
+    }
+    // Guard on json_type: SQLite coerces JSON values across types ('0' ==
+    // false, '1' == true, '0' == 0), which conflates booleans with integers
+    // and drops/matches rows incorrectly (#31591).
     return {
-      sql: `CASE 
-        WHEN ? IS NULL THEN json_extract(metadata, ${jsonPath}) IS ${symbol === '=' ? '' : 'NOT'} NULL
-        ELSE json_extract(metadata, ${jsonPath}) ${symbol} ?
-      END`,
+      sql:
+        symbol === '='
+          ? `(json_extract(metadata, ${jsonPath}) = ? AND json_type(json_extract(metadata, ${jsonPath})) = ?)`
+          : `(json_extract(metadata, ${jsonPath}) != ? OR json_type(json_extract(metadata, ${jsonPath})) != ?)`,
       needsValue: true,
-      transformValue: () => {
-        // Return the values directly, not in an object
-        return [value, value];
-      },
+      transformValue: () => [value, jsonTypeOf(value)],
     };
   };
 };
@@ -52,9 +76,11 @@ const createNumericOperator = (symbol: string) => {
       typeof value === 'number' || (typeof value === 'string' && !isNaN(Number(value)) && value.trim() !== '');
 
     if (isNumeric) {
-      // For numeric values, cast to NUMERIC for proper comparison
+      // For numeric values, cast to NUMERIC for proper comparison, but only
+      // against stored numbers: booleans/text must not range-match through
+      // SQLite's implicit coercion ('true' casts to 1) (#31591).
       return {
-        sql: `CAST(json_extract(metadata, ${jsonPath}) AS NUMERIC) ${symbol} ?`,
+        sql: `(CAST(json_extract(metadata, ${jsonPath}) AS NUMERIC) ${symbol} ? AND json_type(json_extract(metadata, ${jsonPath})) IN ('integer', 'real'))`,
         needsValue: true,
       };
     }
@@ -437,9 +463,19 @@ function buildCondition(key: string, value: any, parentPath: string): FilterResu
   // If condition is not a FilterCondition object, assume it's an equality check
   if (!value || typeof value !== 'object') {
     const jsonPath = getJsonPath(key);
+    if (value === null) {
+      // Explicit null must match an explicit JSON null, not a missing key
+      // (json_extract returns NULL for both) (#31591).
+      return {
+        sql: `json_type(json_extract(metadata, ${jsonPath})) = 'null'`,
+        values: [],
+      };
+    }
+    // Type guard on json_type: SQLite coerces JSON values across types, so
+    // { stage: false } would match a stored { stage: 0 } without it (#31591).
     return {
-      sql: `json_extract(metadata, ${jsonPath}) = ?`,
-      values: [value],
+      sql: `(json_extract(metadata, ${jsonPath}) = ? AND json_type(json_extract(metadata, ${jsonPath})) = ?)`,
+      values: [value, jsonTypeOf(value)],
     };
   }
 
