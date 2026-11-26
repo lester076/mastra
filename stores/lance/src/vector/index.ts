@@ -576,8 +576,16 @@ export class LanceVectorStore extends MastraVector<LanceVectorFilter> {
       const pre = prefix.length ? `${prefix}_` : '';
       if (typeof obj[k] === 'object' && obj[k] !== null && !Array.isArray(obj[k])) {
         Object.assign(acc, this.flattenObject(obj[k] as Record<string, unknown>, pre + k));
+      } else if (obj[k] === null || obj[k] === undefined) {
+        // Lance cannot infer a column type from a null-only value and crashes
+        // table creation on it. The lossless `_metadata_json` column still
+        // carries the original value for round-trips (#31592).
+        return acc;
       } else {
-        acc[pre + k] = obj[k];
+        // Lance field names cannot contain '.', so dotted metadata keys are
+        // flattened with '_' (the same convention the filter path uses)
+        // (#31592).
+        acc[`${pre}${k}`.replace(/\./g, '_')] = obj[k];
       }
       return acc;
     }, {});

@@ -419,6 +419,28 @@ describe('Lance vector store tests', () => {
         await vectorDB.deleteTable(testTableName);
       });
 
+      it('should upsert metadata with dotted keys and null values', async () => {
+        // Lance forbids '.' in field names and cannot infer a column type
+        // from a null-only value; both used to crash the upsert (#31592).
+        const indexName = 'test-dotted-null-' + Date.now();
+        await vectorDB.createIndex({ indexName, dimension: 4 });
+        try {
+          const ids = await vectorDB.upsert({
+            indexName,
+            vectors: [[1, 0, 0, 0]],
+            metadata: [{ 'group.sub': 'alpha', stage: null, plain: 'x' }],
+            ids: ['id-dotted-null'],
+          });
+          expect(ids).toEqual(['id-dotted-null']);
+
+          const results = await vectorDB.query({ indexName, queryVector: [1, 0, 0, 0], topK: 1 });
+          expect(results[0]?.metadata).toMatchObject({ 'group.sub': 'alpha', plain: 'x' });
+          expect(results[0]?.metadata?.stage).toBeNull();
+        } finally {
+          await vectorDB.deleteIndex({ indexName }).catch(() => {});
+        }
+      });
+
       it('should upsert vectors in an existing table', async () => {
         // Table starts with 300 background rows (metadata.text = 'test')
         // Verify background rows exist before upsert
