@@ -34,6 +34,35 @@ function toSqlLiteral(value: unknown): string {
   return `'${escapeString(JSON.stringify(value))}'`;
 }
 
+/** DuckDB `json_type` name for a JS filter value, so comparisons stay type-exact. */
+function duckJsonType(value: unknown): string {
+  if (value === null || value === undefined) return 'NULL';
+  switch (typeof value) {
+    case 'boolean':
+      return 'BOOLEAN';
+    case 'number':
+      return Number.isInteger(value) ? 'BIGINT' : 'DOUBLE';
+    default:
+      return 'VARCHAR';
+  }
+}
+
+/**
+ * Type-guarded equality: DuckDB vectorizes both sides of an AND, so the
+ * comparison must sit behind a CASE to avoid casting a cross-type stored
+ * value (e.g. `'false' = 0` aborts with a Conversion Error) (#31590).
+ */
+function typeExactComparison(field: string, symbol: '=' | '!=', value: unknown): string {
+  const jsonPath = buildRawJsonPath(field);
+  const type = duckJsonType(value);
+  const compare = `json_extract_string(metadata, ${jsonPath}) ${symbol} ${toSqlLiteral(value)}`;
+  if (symbol === '=') {
+    return `CASE WHEN json_type(json_extract(metadata, ${jsonPath})) = '${type}' THEN ${compare} ELSE FALSE END`;
+  }
+  // Cross-type values are unequal; a missing key stays unmatched.
+  return `CASE WHEN json_type(json_extract(metadata, ${jsonPath})) = '${type}' THEN ${compare} WHEN json_type(json_extract(metadata, ${jsonPath})) IS NULL THEN FALSE ELSE TRUE END`;
+}
+
 /**
  * Build a SQL WHERE clause from a filter object.
  * Supports MongoDB-style query operators.
@@ -94,8 +123,8 @@ export function buildFilterClause(filter: DuckDBVectorFilter): FilterResult {
         conditions.push(operatorResult);
       }
     } else {
-      // Direct equality - for strings, compare directly; for others, use SQL literal
-      conditions.push(`${fieldPath} = ${toSqlLiteral(value)}`);
+      // Direct equality, type-guarded so bool/int/text never coerce (#31590).
+      conditions.push(typeExactComparison(key, '=', value));
     }
   }
 
@@ -111,14 +140,17 @@ export function buildFilterClause(filter: DuckDBVectorFilter): FilterResult {
  * DuckDB uses json_extract_string for extracting string values from JSON.
  */
 function buildJsonPath(field: string): string {
+  // Use json_extract_string for proper string extraction in DuckDB
+  return `json_extract_string(metadata, ${buildRawJsonPath(field)})`;
+}
+
+/** The quoted JSON path literal shared by extraction and type checks. */
+function buildRawJsonPath(field: string): string {
   // Handle nested paths with dot notation
   const parts = field.split('.');
 
   // Build the JSON path with $ prefix for DuckDB
-  const jsonPath = '$.' + parts.map(p => escapeString(p)).join('.');
-
-  // Use json_extract_string for proper string extraction in DuckDB
-  return `json_extract_string(metadata, '${jsonPath}')`;
+  return `'$.` + parts.map(p => escapeString(p)).join('.') + `'`;
 }
 
 /**
@@ -134,7 +166,7 @@ function buildOperatorCondition(field: string, operators: Record<string, unknown
         if (value === null) {
           conditions.push(`${fieldPath} IS NULL`);
         } else {
-          conditions.push(`${fieldPath} = ${toSqlLiteral(value)}`);
+          conditions.push(typeExactComparison(field, '=', value));
         }
         break;
 
@@ -142,24 +174,32 @@ function buildOperatorCondition(field: string, operators: Record<string, unknown
         if (value === null) {
           conditions.push(`${fieldPath} IS NOT NULL`);
         } else {
-          conditions.push(`${fieldPath} != ${toSqlLiteral(value)}`);
+          conditions.push(typeExactComparison(field, '!=', value));
         }
         break;
 
       case '$gt':
-        conditions.push(`CAST(${fieldPath} AS DOUBLE) > ${toSqlLiteral(value)}`);
+        conditions.push(
+          `CASE WHEN json_type(json_extract(metadata, ${buildRawJsonPath(field)})) IN ('BIGINT', 'DOUBLE') THEN TRY_CAST(${fieldPath} AS DOUBLE) > ${toSqlLiteral(value)} ELSE FALSE END`,
+        );
         break;
 
       case '$gte':
-        conditions.push(`CAST(${fieldPath} AS DOUBLE) >= ${toSqlLiteral(value)}`);
+        conditions.push(
+          `CASE WHEN json_type(json_extract(metadata, ${buildRawJsonPath(field)})) IN ('BIGINT', 'DOUBLE') THEN TRY_CAST(${fieldPath} AS DOUBLE) >= ${toSqlLiteral(value)} ELSE FALSE END`,
+        );
         break;
 
       case '$lt':
-        conditions.push(`CAST(${fieldPath} AS DOUBLE) < ${toSqlLiteral(value)}`);
+        conditions.push(
+          `CASE WHEN json_type(json_extract(metadata, ${buildRawJsonPath(field)})) IN ('BIGINT', 'DOUBLE') THEN TRY_CAST(${fieldPath} AS DOUBLE) < ${toSqlLiteral(value)} ELSE FALSE END`,
+        );
         break;
 
       case '$lte':
-        conditions.push(`CAST(${fieldPath} AS DOUBLE) <= ${toSqlLiteral(value)}`);
+        conditions.push(
+          `CASE WHEN json_type(json_extract(metadata, ${buildRawJsonPath(field)})) IN ('BIGINT', 'DOUBLE') THEN TRY_CAST(${fieldPath} AS DOUBLE) <= ${toSqlLiteral(value)} ELSE FALSE END`,
+        );
         break;
 
       case '$in':
