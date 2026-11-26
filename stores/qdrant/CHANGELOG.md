@@ -1,5 +1,14 @@
 # @mastra/qdrant
 
+## 1.1.8-alpha.0
+
+### Patch Changes
+
+- Fixed filters that combine a logical operator with sibling field conditions. A filter such as `{ $or: [{ status: 'active' }, { featured: true }], tenantId: 'tenant-a' }` previously dropped the sibling fields (or produced an invalid filter when the fields came first). The conditions are now combined with AND, so results must satisfy both the logical operator and the sibling fields, regardless of key order. ([#31598](https://github.com/mastra-ai/mastra/pull/31598))
+
+- Updated dependencies [[`c5a632e`](https://github.com/mastra-ai/mastra/commit/c5a632e892d70f330de4bc2bf5a9054b91186405)]:
+  - @mastra/core@1.87.0-alpha.3
+
 ## 1.1.7
 
 ### Patch Changes
