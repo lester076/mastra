@@ -31,6 +31,10 @@ import {
 } from './durable-event-payload';
 import type { InngestEngineType } from './types';
 
+// Terminal statuses whose snapshot a late cancellation must not rewrite,
+// mirroring the core Run's terminal preservation (#31596).
+const FINISHED_RUN_STATUSES = new Set(['success', 'failed', 'canceled', 'tripwire']);
+
 export class InngestRun<
   TEngineType = InngestEngineType,
   TSteps extends Step<string, any, any, any, any, any, TEngineType>[] = Step<
@@ -263,6 +267,12 @@ export class InngestRun<
       runId: this.runId,
     });
     if (snapshot) {
+      // A late cancellation (e.g. from a stale run view) must not rewrite
+      // terminal history: preserve finished runs like the core Run does
+      // (#31596).
+      if (FINISHED_RUN_STATUSES.has(snapshot.status)) {
+        return;
+      }
       await workflowsStore?.persistWorkflowSnapshot({
         workflowName: this.workflowId,
         runId: this.runId,
